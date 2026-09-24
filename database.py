@@ -1,213 +1,107 @@
-import os
-import asyncpg
-from datetime import datetime
+# database.py
 
-DATABASE_URL = os.getenv("DATABASE_URL", "")
+import aiosqlite
+from datetime import datetime, timedelta
 
-_pool = None
-
-
-async def get_pool():
-    global _pool
-    if _pool is None:
-        _pool = await asyncpg.create_pool(DATABASE_URL, ssl="require")
-    return _pool
-
+DB_NAME = "prgram.db"
 
 async def init_db():
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS tasks (
-                id SERIAL PRIMARY KEY,
-                title TEXT NOT NULL,
-                type TEXT NOT NULL,
-                target TEXT,
-                url TEXT NOT NULL,
-                active INTEGER DEFAULT 1,
-                created_at TEXT
-            )
-        """)
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS progress (
-                user_id BIGINT NOT NULL,
-                task_id INTEGER NOT NULL,
-                status TEXT DEFAULT 'bekliyor',
-                photo_file_id TEXT,
-                updated_at TEXT,
-                PRIMARY KEY (user_id, task_id)
-            )
-        """)
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS settings (
-                key TEXT PRIMARY KEY,
-                value TEXT
-            )
-        """)
-        await conn.execute("""
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute("""
             CREATE TABLE IF NOT EXISTS users (
-                user_id BIGINT PRIMARY KEY,
+                user_id INTEGER PRIMARY KEY,
                 username TEXT,
-                first_seen TEXT
+                full_name TEXT,
+                balance INTEGER DEFAULT 0,
+                xp INTEGER DEFAULT 0,
+                level INTEGER DEFAULT 1,
+                referrer INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS ad_channels (
-                id SERIAL PRIMARY KEY,
-                title TEXT NOT NULL,
-                chat_id TEXT NOT NULL,
-                active INTEGER DEFAULT 1,
-                added_at TEXT
+        
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS tasks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                owner_id INTEGER,
+                task_type TEXT,
+                title TEXT,
+                link TEXT,
+                chat_id TEXT,
+                reward INTEGER,
+                status TEXT DEFAULT 'active',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS completions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                task_id INTEGER,
+                completed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                join_date TIMESTAMP,
+                revoked INTEGER DEFAULT 0
+            )
+        """)
+        
+        await db.commit()
 
+async def get_user(user_id: int):
+    async with aiosqlite.connect(DB_NAME) as db:
+        async with db.execute("SELECT * FROM users WHERE user_id = ?", (user_id,)) as cursor:
+            return await cursor.fetchone()
 
-# ---------- TASKS ----------
-
-async def add_task(title, ttype, target, url):
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            "INSERT INTO tasks (title, type, target, url, active, created_at) "
-            "VALUES ($1, $2, $3, $4, 1, $5) RETURNING id",
-            title, ttype, target, url, datetime.utcnow().isoformat()
+async def create_user(user_id: int, username: str, full_name: str, referrer: int = None):
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute(
+            "INSERT OR IGNORE INTO users (user_id, username, full_name, referrer, balance) VALUES (?, ?, ?, ?, ?)",
+            (user_id, username, full_name, referrer, 0)
         )
-        return row["id"]
+        await db.commit()
 
+async def update_balance(user_id: int, amount: int):
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amount, user_id))
+        await db.commit()
 
-async def get_active_tasks():
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        return await conn.fetch("SELECT * FROM tasks WHERE active = 1 ORDER BY id")
+async def add_xp(user_id: int, xp: int):
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute("UPDATE users SET xp = xp + ? WHERE user_id = ?", (xp, user_id))
+        await db.commit()
 
-
-async def get_all_tasks():
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        return await conn.fetch("SELECT * FROM tasks ORDER BY id")
-
-
-async def get_task(task_id):
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        return await conn.fetchrow("SELECT * FROM tasks WHERE id = $1", task_id)
-
-
-async def delete_task(task_id):
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        await conn.execute("UPDATE tasks SET active = 0 WHERE id = $1", task_id)
-
-
-# ---------- PROGRESS ----------
-
-async def get_progress(user_id, task_id):
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        return await conn.fetchrow(
-            "SELECT * FROM progress WHERE user_id = $1 AND task_id = $2", user_id, task_id
+async def create_task(owner_id: int, task_type: str, title: str, link: str, chat_id: str, reward: int):
+    async with aiosqlite.connect(DB_NAME) as db:
+        cursor = await db.execute(
+            "INSERT INTO tasks (owner_id, task_type, title, link, chat_id, reward) VALUES (?, ?, ?, ?, ?, ?)",
+            (owner_id, task_type, title, link, chat_id, reward)
         )
+        await db.commit()
+        return cursor.lastrowid
 
+async def get_active_tasks(task_type: str = None, limit: int = 10):
+    async with aiosqlite.connect(DB_NAME) as db:
+        if task_type:
+            query = "SELECT * FROM tasks WHERE status = 'active' AND task_type = ? ORDER BY id DESC LIMIT ?"
+            async with db.execute(query, (task_type, limit)) as cursor:
+                return await cursor.fetchall()
+        else:
+            query = "SELECT * FROM tasks WHERE status = 'active' ORDER BY id DESC LIMIT ?"
+            async with db.execute(query, (limit,)) as cursor:
+                return await cursor.fetchall()
 
-async def set_progress(user_id, task_id, status, photo_file_id=None):
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        await conn.execute("""
-            INSERT INTO progress (user_id, task_id, status, photo_file_id, updated_at)
-            VALUES ($1, $2, $3, $4, $5)
-            ON CONFLICT (user_id, task_id) DO UPDATE SET
-                status = EXCLUDED.status,
-                photo_file_id = EXCLUDED.photo_file_id,
-                updated_at = EXCLUDED.updated_at
-        """, user_id, task_id, status, photo_file_id, datetime.utcnow().isoformat())
-
-
-async def get_user_progress_map(user_id):
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        rows = await conn.fetch("SELECT task_id, status FROM progress WHERE user_id = $1", user_id)
-        return {r["task_id"]: r["status"] for r in rows}
-
-
-async def all_tasks_approved(user_id):
-    tasks = await get_active_tasks()
-    if not tasks:
-        return False
-    prog = await get_user_progress_map(user_id)
-    return all(prog.get(t["id"]) == "onaylandi" for t in tasks)
-
-
-# ---------- SETTINGS (ödül linki) ----------
-
-async def set_setting(key, value):
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        await conn.execute("""
-            INSERT INTO settings (key, value) VALUES ($1, $2)
-            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
-        """, key, value)
-
-
-async def get_setting(key):
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow("SELECT value FROM settings WHERE key = $1", key)
-        return row["value"] if row else None
-
-
-# ---------- ÖDÜL TEKİL GÖNDERİM TAKİBİ ----------
-
-async def is_reward_sent(user_id: int) -> bool:
-    return (await get_setting(f"reward_sent_{user_id}")) == "1"
-
-
-async def mark_reward_sent(user_id: int):
-    await set_setting(f"reward_sent_{user_id}", "1")
-
-
-# ---------- KULLANICI KAYDI (bildirim için) ----------
-
-async def add_user(user_id: int, username: str = None):
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        await conn.execute("""
-            INSERT INTO users (user_id, username, first_seen) VALUES ($1, $2, $3)
-            ON CONFLICT (user_id) DO UPDATE SET username = EXCLUDED.username
-        """, user_id, username, datetime.utcnow().isoformat())
-
-
-async def get_all_users():
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        rows = await conn.fetch("SELECT user_id FROM users")
-        return [r["user_id"] for r in rows]
-
-
-# ---------- REKLAM KANALLARI ----------
-
-async def add_channel(title, chat_id):
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            "INSERT INTO ad_channels (title, chat_id, active, added_at) VALUES ($1, $2, 1, $3) RETURNING id",
-            title, chat_id, datetime.utcnow().isoformat()
+async def add_completion(user_id: int, task_id: int):
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute(
+            "INSERT INTO completions (user_id, task_id, join_date) VALUES (?, ?, ?)",
+            (user_id, task_id, datetime.now())
         )
-        return row["id"]
+        await db.commit()
 
-
-async def get_active_channels():
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        return await conn.fetch("SELECT * FROM ad_channels WHERE active = 1 ORDER BY id")
-
-
-async def get_all_channels():
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        return await conn.fetch("SELECT * FROM ad_channels ORDER BY id")
-
-
-async def delete_channel(channel_id):
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        await conn.execute("UPDATE ad_channels SET active = 0 WHERE id = $1", channel_id)
+async def check_completion(user_id: int, task_id: int):
+    async with aiosqlite.connect(DB_NAME) as db:
+        async with db.execute(
+            "SELECT * FROM completions WHERE user_id = ? AND task_id = ? AND revoked = 0",
+            (user_id, task_id)
+        ) as cursor:
+            return await cursor.fetchone()
