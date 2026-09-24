@@ -9,6 +9,7 @@ from aiogram.enums import ChatMemberStatus
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.exceptions import TelegramBadRequest
 
 from config import BOT_TOKEN, REWARDS
 from database import (
@@ -96,20 +97,32 @@ async def start_handler(message: Message, state: FSMContext):
 @dp.callback_query(F.data == "back_main")
 async def back_main(callback: CallbackQuery, state: FSMContext):
     await state.clear()
-    await callback.message.edit_text("Ana menü", reply_markup=main_menu())
+    try:
+        await callback.message.edit_text("Ana menü", reply_markup=main_menu())
+    except TelegramBadRequest:
+        pass
+    await callback.answer()
 
 @dp.callback_query(F.data == "cancel_add")
 async def cancel_add(callback: CallbackQuery, state: FSMContext):
     await state.clear()
-    await callback.message.edit_text("İptal edildi.", reply_markup=main_menu())
+    try:
+        await callback.message.edit_text("İptal edildi.", reply_markup=main_menu())
+    except TelegramBadRequest:
+        pass
+    await callback.answer()
 
 @dp.callback_query(F.data == "earn")
 async def earn_handler(callback: CallbackQuery):
-    await callback.message.edit_text(
-        "🎯 <b>Kazanmak için görev kategorisi seç</b>",
-        reply_markup=earn_categories(),
-        parse_mode="HTML"
-    )
+    try:
+        await callback.message.edit_text(
+            "🎯 <b>Kazanmak için görev kategorisi seç</b>",
+            reply_markup=earn_categories(),
+            parse_mode="HTML"
+        )
+    except TelegramBadRequest:
+        pass
+    await callback.answer()
 
 @dp.callback_query(F.data.startswith("cat_"))
 async def category_handler(callback: CallbackQuery):
@@ -117,13 +130,16 @@ async def category_handler(callback: CallbackQuery):
     tasks = await get_active_tasks(cat)
     
     if not tasks:
-        await callback.message.edit_text(
+        text = (
             "❌ <b>Uygun görev yok</b>\n\n"
             "⚠️ Kanallardan / Gruplardan 7 günden önce ayrılma.\n"
-            "Aksi halde görev yapman engellenir ve kazandığın GRAM iptal edilir.",
-            reply_markup=earn_categories(),
-            parse_mode="HTML"
+            "Aksi halde görev yapman engellenir ve kazandığın GRAM iptal edilir."
         )
+        try:
+            await callback.message.edit_text(text, reply_markup=earn_categories(), parse_mode="HTML")
+        except TelegramBadRequest:
+            pass
+        await callback.answer()
         return
     
     text = f"📋 <b>{cat.upper()} Görevleri</b>\n\n"
@@ -138,7 +154,12 @@ async def category_handler(callback: CallbackQuery):
         )])
     
     kb.append([InlineKeyboardButton(text="🔙 Geri", callback_data="earn")])
-    await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb), parse_mode="HTML")
+    
+    try:
+        await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb), parse_mode="HTML")
+    except TelegramBadRequest:
+        pass
+    await callback.answer()
 
 @dp.callback_query(F.data.startswith("task_"))
 async def show_task(callback: CallbackQuery):
@@ -157,7 +178,11 @@ async def show_task(callback: CallbackQuery):
         f"1. Aşağıdaki butona tıkla ve abone ol\n"
         f"2. Sonra <b>Kontrol Et</b> butonuna bas"
     )
-    await callback.message.edit_text(text, reply_markup=task_keyboard(task_id, link), parse_mode="HTML")
+    try:
+        await callback.message.edit_text(text, reply_markup=task_keyboard(task_id, link), parse_mode="HTML")
+    except TelegramBadRequest:
+        pass
+    await callback.answer()
 
 @dp.callback_query(F.data.startswith("check_"))
 async def check_task(callback: CallbackQuery):
@@ -209,11 +234,15 @@ async def check_task(callback: CallbackQuery):
 # ==================== GÖREV EKLEME ====================
 @dp.callback_query(F.data == "promote")
 async def promote_handler(callback: CallbackQuery):
-    await callback.message.edit_text(
-        "📢 <b>Ne tanıtmak istiyorsun?</b>",
-        reply_markup=promote_menu(),
-        parse_mode="HTML"
-    )
+    try:
+        await callback.message.edit_text(
+            "📢 <b>Ne tanıtmak istiyorsun?</b>",
+            reply_markup=promote_menu(),
+            parse_mode="HTML"
+        )
+    except TelegramBadRequest:
+        pass
+    await callback.answer()
 
 @dp.callback_query(F.data.in_({"add_channel", "add_group", "add_bot", "add_view"}))
 async def start_add_task(callback: CallbackQuery, state: FSMContext):
@@ -229,15 +258,19 @@ async def start_add_task(callback: CallbackQuery, state: FSMContext):
     await state.update_data(task_type=task_type)
     await state.set_state(AddTask.waiting_link)
     
-    await callback.message.edit_text(
-        f"📎 <b>{type_names.get(task_type, 'Görev')} linkini gönder</b>\n\n"
-        f"Örnek:\n"
-        f"• https://t.me/kanaladi\n"
-        f"• https://t.me/+DavetKodu\n\n"
-        f"Botun o kanalda/grupta <b>admin</b> olması gerekir!",
-        reply_markup=cancel_kb(),
-        parse_mode="HTML"
-    )
+    try:
+        await callback.message.edit_text(
+            f"📎 <b>{type_names.get(task_type, 'Görev')} linkini gönder</b>\n\n"
+            f"Örnek:\n"
+            f"• https://t.me/kanaladi\n"
+            f"• https://t.me/+DavetKodu\n\n"
+            f"Botun o kanalda/grupta <b>admin</b> olması gerekir!",
+            reply_markup=cancel_kb(),
+            parse_mode="HTML"
+        )
+    except TelegramBadRequest:
+        pass
+    await callback.answer()
 
 @dp.message(AddTask.waiting_link)
 async def process_link(message: Message, state: FSMContext):
@@ -269,7 +302,6 @@ async def process_title(message: Message, state: FSMContext):
     if "t.me/" in link:
         part = link.split("t.me/")[-1].split("?")[0].strip("/")
         if part.startswith("+"):
-            # özel davet linki
             chat_id = link
         else:
             chat_id = "@" + part.lstrip("@")
@@ -311,7 +343,11 @@ async def profile_handler(callback: CallbackQuery):
         f"🐣 Seviye: Acemi\n"
         f"💰 Bakiye: <b>{user[3]} GRAM</b>"
     )
-    await callback.message.edit_text(text, reply_markup=main_menu(), parse_mode="HTML")
+    try:
+        await callback.message.edit_text(text, reply_markup=main_menu(), parse_mode="HTML")
+    except TelegramBadRequest:
+        pass
+    await callback.answer()
 
 @dp.callback_query(F.data == "rules")
 async def rules_handler(callback: CallbackQuery):
@@ -323,7 +359,11 @@ async def rules_handler(callback: CallbackQuery):
         "4. Görev eklerken botun kanalda admin olması gerekir.\n"
         "5. Bakiye hiçbir zaman kaybolmaz."
     )
-    await callback.message.edit_text(text, reply_markup=main_menu(), parse_mode="HTML")
+    try:
+        await callback.message.edit_text(text, reply_markup=main_menu(), parse_mode="HTML")
+    except TelegramBadRequest:
+        pass
+    await callback.answer()
 
 @dp.callback_query(F.data == "referral")
 async def referral_handler(callback: CallbackQuery):
@@ -334,7 +374,11 @@ async def referral_handler(callback: CallbackQuery):
         f"<code>{link}</code>\n\n"
         f"Arkadaşlarını davet et, onlar görev yaptıkça sen de kazan!"
     )
-    await callback.message.edit_text(text, reply_markup=main_menu(), parse_mode="HTML")
+    try:
+        await callback.message.edit_text(text, reply_markup=main_menu(), parse_mode="HTML")
+    except TelegramBadRequest:
+        pass
+    await callback.answer()
 
 # ==================== BAŞLATMA ====================
 async def main():
