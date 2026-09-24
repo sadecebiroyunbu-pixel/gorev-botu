@@ -1,18 +1,9 @@
 services:
-  - type: web
-    name: gorev-botu
+  - type: worker
+    name: prgram-bot
     env: python
-    plan: free
     buildCommand: pip install -r requirements.txt
     startCommand: python bot.py
     envVars:
       - key: BOT_TOKEN
         sync: false
-      - key: ADMIN_IDS
-        sync: false
-      - key: DB_PATH
-        value: /opt/render/project/src/data/gorevbot.db
-    disk:
-      name: gorevbot-data
-      mountPath: /opt/render/project/src/data
-      sizeGB: 1
