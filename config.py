@@ -2,12 +2,12 @@
 import os
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-
 if not BOT_TOKEN:
-    raise ValueError("BOT_TOKEN environment variable bulunamadı! Render'de Environment kısmına ekle.")
+    raise ValueError("BOT_TOKEN environment variable bulunamadı!")
 
-# Admin ID'lerin (kendi Telegram ID'ni yaz)
-ADMINS = [123456789]  # buraya kendi ID'ni yaz
+# Admin ID'leri (Render'deki ADMIN_IDS değişkeninden alıyor)
+admin_ids_str = os.getenv("ADMIN_IDS", "")
+ADMINS = [int(x.strip()) for x in admin_ids_str.split(",") if x.strip().isdigit()]
 
 # Başlangıç bakiyesi
 START_BALANCE = 0
