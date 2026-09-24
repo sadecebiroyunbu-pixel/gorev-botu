@@ -2,22 +2,30 @@
 
 import asyncio
 import logging
+import re
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import CommandStart
 from aiogram.enums import ChatMemberStatus
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 
 from config import BOT_TOKEN, REWARDS
 from database import (
     init_db, get_user, create_user, update_balance, get_balance,
-    get_active_tasks, get_task, add_completion, check_completion
+    get_active_tasks, get_task, add_completion, check_completion, create_task
 )
 
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN)
 storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
+
+# ==================== STATES ====================
+class AddTask(StatesGroup):
+    waiting_link = State()
+    waiting_title = State()
 
 # ==================== KEYBOARDS ====================
 def main_menu():
@@ -60,9 +68,15 @@ def task_keyboard(task_id: int, link: str):
     ]
     return InlineKeyboardMarkup(inline_keyboard=kb)
 
+def cancel_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="❌ İptal", callback_data="cancel_add")]
+    ])
+
 # ==================== HANDLERS ====================
 @dp.message(CommandStart())
-async def start_handler(message: Message):
+async def start_handler(message: Message, state: FSMContext):
+    await state.clear()
     user = message.from_user
     referrer = None
     if len(message.text.split()) > 1:
@@ -76,13 +90,19 @@ async def start_handler(message: Message):
     text = (
         f"👋 <b>PR GRAM | DRAGON</b>'a hoş geldin!\n\n"
         f"Telegram'da tanıtım platformu\n\n"
-        f"Görev yap, GRAM kazan!"
+        f"Görev yap, GRAM kazan, kendi kanalını tanıt!"
     )
     await message.answer(text, reply_markup=main_menu(), parse_mode="HTML")
 
 @dp.callback_query(F.data == "back_main")
-async def back_main(callback: CallbackQuery):
+async def back_main(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
     await callback.message.edit_text("Ana menü", reply_markup=main_menu())
+
+@dp.callback_query(F.data == "cancel_add")
+async def cancel_add(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await callback.message.edit_text("İptal edildi.", reply_markup=main_menu())
 
 @dp.callback_query(F.data == "earn")
 async def earn_handler(callback: CallbackQuery):
@@ -145,7 +165,6 @@ async def check_task(callback: CallbackQuery):
     task_id = int(callback.data.replace("check_", ""))
     user_id = callback.from_user.id
     
-    # Daha önce yapmış mı?
     if await check_completion(user_id, task_id):
         await callback.answer("Bu görevi zaten tamamladın!", show_alert=True)
         return
@@ -158,11 +177,9 @@ async def check_task(callback: CallbackQuery):
     _, _, task_type, title, link, chat_id, reward, *_ = task
     
     try:
-        # Gerçek abone kontrolü
         member = await bot.get_chat_member(chat_id=chat_id, user_id=user_id)
         
         if member.status in [ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR]:
-            # Başarılı
             success = await add_completion(user_id, task_id)
             if success:
                 await update_balance(user_id, reward)
@@ -183,14 +200,95 @@ async def check_task(callback: CallbackQuery):
             
     except Exception as e:
         logging.error(f"Check error: {e}")
-        await callback.answer("Kontrol sırasında hata oluştu. Link doğru mu?", show_alert=True)
+        await callback.answer("Kontrol sırasında hata oluştu. Bot kanalda admin mi?", show_alert=True)
 
+# ==================== GÖREV EKLEME ====================
 @dp.callback_query(F.data == "promote")
 async def promote_handler(callback: CallbackQuery):
     await callback.message.edit_text(
-        "📢 <b>Ne tanıtmak istiyorsun?</b>\n\n"
-        "Şu an görev ekleme sistemi yakında aktif olacak.",
+        "📢 <b>Ne tanıtmak istiyorsun?</b>",
         reply_markup=promote_menu(),
+        parse_mode="HTML"
+    )
+
+@dp.callback_query(F.data.in_({"add_channel", "add_group", "add_bot", "add_view"}))
+async def start_add_task(callback: CallbackQuery, state: FSMContext):
+    task_type = callback.data.replace("add_", "")
+    
+    type_names = {
+        "channel": "Kanal",
+        "group": "Grup",
+        "bot": "Bot",
+        "view": "Gönderi"
+    }
+    
+    await state.update_data(task_type=task_type)
+    await state.set_state(AddTask.waiting_link)
+    
+    await callback.message.edit_text(
+        f"📎 <b>{type_names.get(task_type, 'Görev')} linkini gönder</b>\n\n"
+        f"Örnek:\n"
+        f"• https://t.me/kanaladi\n"
+        f"• https://t.me/+DavetKodu\n\n"
+        f"Botun o kanalda/grupta <b>admin</b> olması gerekir!",
+        reply_markup=cancel_kb(),
+        parse_mode="HTML"
+    )
+
+@dp.message(AddTask.waiting_link)
+async def process_link(message: Message, state: FSMContext):
+    link = message.text.strip()
+    
+    if not ("t.me/" in link or "telegram.me/" in link):
+        await message.answer("❌ Geçerli bir Telegram linki gönder.", reply_markup=cancel_kb())
+        return
+    
+    await state.update_data(link=link)
+    await state.set_state(AddTask.waiting_title)
+    
+    await message.answer(
+        "📝 Görev başlığını yaz (kısa olsun):\n\n"
+        "Örnek: En iyi kripto kanalı",
+        reply_markup=cancel_kb()
+    )
+
+@dp.message(AddTask.waiting_title)
+async def process_title(message: Message, state: FSMContext):
+    title = message.text.strip()[:50]
+    data = await state.get_data()
+    
+    task_type = data.get("task_type")
+    link = data.get("link")
+    
+    # chat_id'yi linkten çıkarmaya çalış
+    chat_id = link
+    if "t.me/" in link:
+        part = link.split("t.me/")[-1].replace("+", "")
+        if part.startswith("@"):
+            chat_id = part
+        else:
+            chat_id = "@" + part if not part.startswith("+") else link
+    
+    reward = REWARDS.get(task_type, 500)
+    
+    task_id = await create_task(
+        owner_id=message.from_user.id,
+        task_type=task_type,
+        title=title,
+        link=link,
+        chat_id=chat_id,
+        reward=reward
+    )
+    
+    await state.clear()
+    
+    await message.answer(
+        f"✅ <b>Görev başarıyla eklendi!</b>\n\n"
+        f"Başlık: {title}\n"
+        f"Ödül: +{reward} GRAM\n"
+        f"Görev ID: {task_id}\n\n"
+        f"Artık diğer kullanıcılar bu görevi yapabilir.",
+        reply_markup=main_menu(),
         parse_mode="HTML"
     )
 
@@ -216,7 +314,8 @@ async def rules_handler(callback: CallbackQuery):
         "1. Görev yaptıktan sonra kanaldan/gruptan <b>7 gün</b> boyunca çıkma.\n"
         "2. 7 günden önce çıkarsan kazandığın GRAM geri alınır.\n"
         "3. Sahte abonelik yasaktır.\n"
-        "4. Bakiye hiçbir zaman kaybolmaz."
+        "4. Görev eklerken botun kanalda admin olması gerekir.\n"
+        "5. Bakiye hiçbir zaman kaybolmaz."
     )
     await callback.message.edit_text(text, reply_markup=main_menu(), parse_mode="HTML")
 
