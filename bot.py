@@ -299,7 +299,7 @@ async def add_task_start(message: Message, state: FSMContext):
     await message.answer("Görev başlığı nedir? (kullanıcıya gösterilecek isim)")
 
 
-@router.message(AddTask.title)
+@router.message(AddTask.title, ~F.text.startswith("/"))
 async def add_task_title(message: Message, state: FSMContext):
     await state.update_data(title=message.text)
     await state.set_state(AddTask.type_)
@@ -311,7 +311,7 @@ async def add_task_title(message: Message, state: FSMContext):
     )
 
 
-@router.message(AddTask.type_)
+@router.message(AddTask.type_, ~F.text.startswith("/"))
 async def add_task_type(message: Message, state: FSMContext):
     ttype = message.text.strip().lower()
     if ttype not in ("kanal", "bot"):
@@ -330,14 +330,14 @@ async def add_task_type(message: Message, state: FSMContext):
         await message.answer("Kullanıcının gideceği linki gönder (örn. https://t.me/digerbot):")
 
 
-@router.message(AddTask.target)
+@router.message(AddTask.target, ~F.text.startswith("/"))
 async def add_task_target(message: Message, state: FSMContext):
     await state.update_data(target=message.text.strip())
     await state.set_state(AddTask.url)
     await message.answer("Kullanıcıya gösterilecek link nedir? (kanala davet linki)")
 
 
-@router.message(AddTask.url)
+@router.message(AddTask.url, ~F.text.startswith("/"))
 async def add_task_url(message: Message, state: FSMContext):
     data = await state.get_data()
     task_id = await db.add_task(
@@ -406,7 +406,7 @@ async def set_reward_start(message: Message, state: FSMContext):
     await message.answer("Tüm görevler bitince kullanıcıya gösterilecek ÖDÜL linkini gönder:")
 
 
-@router.message(SetReward.waiting_link)
+@router.message(SetReward.waiting_link, ~F.text.startswith("/"))
 async def set_reward_finish(message: Message, state: FSMContext):
     await db.set_setting("reward_link", message.text.strip())
     await state.clear()
@@ -425,7 +425,7 @@ async def add_channel_start(message: Message, state: FSMContext):
     await message.answer("Kanalın/grubun adı ne? (senin hatırlaman için, örn. 'MRG Airdrop Kanalı')")
 
 
-@router.message(AddChannel.title)
+@router.message(AddChannel.title, ~F.text.startswith("/"))
 async def add_channel_title(message: Message, state: FSMContext):
     await state.update_data(title=message.text.strip())
     await state.set_state(AddChannel.chat_id)
@@ -436,7 +436,7 @@ async def add_channel_title(message: Message, state: FSMContext):
     )
 
 
-@router.message(AddChannel.chat_id)
+@router.message(AddChannel.chat_id, ~F.text.startswith("/"))
 async def add_channel_finish(message: Message, state: FSMContext):
     data = await state.get_data()
     chat_id = message.text.strip()
@@ -517,6 +517,14 @@ async def send_ad_broadcast(message: Message, state: FSMContext):
     await message.answer(report)
 
 
+@router.message(Command("iptal"))
+async def cancel_cmd(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    await state.clear()
+    await message.answer("✅ Yarım kalan işlem iptal edildi. Komutlarına devam edebilirsin.")
+
+
 @router.message(Command("yardim"))
 async def help_cmd(message: Message):
     if not is_admin(message.from_user.id):
@@ -532,7 +540,8 @@ async def help_cmd(message: Message):
         "/kanalekle — reklam yayınlanacak kanal kaydet\n"
         "/kanallar — kayıtlı kanalları listele\n"
         "/kanalsil ID — kanalı listeden çıkar\n"
-        "/reklamgonder — kayıtlı tüm kanallara reklam yayınla\n",
+        "/reklamgonder — kayıtlı tüm kanallara reklam yayınla\n\n"
+        "/iptal — yarım kalan bir işlemi (görev/kanal ekleme vs.) iptal et\n",
         parse_mode="HTML"
     )
 
