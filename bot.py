@@ -61,12 +61,9 @@ def task_list_keyboard(tasks, progress_map):
 def task_detail_keyboard(task):
     kb = [
         [InlineKeyboardButton(text="🔗 Linke Git", url=task["url"])],
+        [InlineKeyboardButton(text="✅ Yaptım, Kanıt Gönder", callback_data=f"proof_{task['id']}")],
+        [InlineKeyboardButton(text="⬅️ Görev Listesi", callback_data="back_list")],
     ]
-    if task["type"] == "kanal":
-        kb.append([InlineKeyboardButton(text="✅ Katıldım, Kontrol Et", callback_data=f"check_{task['id']}")])
-    else:
-        kb.append([InlineKeyboardButton(text="✅ Yaptım, Kanıt Gönder", callback_data=f"proof_{task['id']}")])
-    kb.append([InlineKeyboardButton(text="⬅️ Görev Listesi", callback_data="back_list")])
     return InlineKeyboardMarkup(inline_keyboard=kb)
 
 
@@ -84,6 +81,7 @@ def admin_review_keyboard(user_id, task_id):
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
+    await db.add_user(message.from_user.id, message.from_user.username)
     tasks = await db.get_active_tasks()
     if not tasks:
         await message.answer("Şu anda aktif görev bulunmuyor. Daha sonra tekrar dene.")
@@ -94,9 +92,10 @@ async def cmd_start(message: Message, state: FSMContext):
         return
 
     progress_map = await db.get_user_progress_map(message.from_user.id)
+    remaining = [t for t in tasks if progress_map.get(t["id"]) != "onaylandi"]
     await message.answer(
         "👋 Hoş geldin!\n\nÖdülü almak için aşağıdaki görevleri tamamla:",
-        reply_markup=task_list_keyboard(tasks, progress_map)
+        reply_markup=task_list_keyboard(remaining, progress_map)
     )
 
 
@@ -104,7 +103,13 @@ async def cmd_start(message: Message, state: FSMContext):
 async def back_list(call: CallbackQuery):
     tasks = await db.get_active_tasks()
     progress_map = await db.get_user_progress_map(call.from_user.id)
-    await call.message.edit_text("Görev listesi:", reply_markup=task_list_keyboard(tasks, progress_map))
+    remaining = [t for t in tasks if progress_map.get(t["id"]) != "onaylandi"]
+    if not remaining:
+        if await db.all_tasks_approved(call.from_user.id):
+            await send_reward(call.from_user.id)
+        await call.answer()
+        return
+    await call.message.edit_text("Görev listesi:", reply_markup=task_list_keyboard(remaining, progress_map))
     await call.answer()
 
 
@@ -129,6 +134,11 @@ async def check_membership(call: CallbackQuery):
     task = await db.get_task(task_id)
     if not task:
         await call.answer("Görev bulunamadı.", show_alert=True)
+        return
+
+    existing = await db.get_progress(call.from_user.id, task_id)
+    if existing and existing["status"] == "onaylandi":
+        await call.answer("Bu görevi zaten tamamladın ✅", show_alert=True)
         return
 
     try:
@@ -218,11 +228,15 @@ async def safe_send(user_id: int, text: str, notify_admin_on_fail: bool = True) 
 
 
 async def send_reward(user_id: int):
+    if await db.is_reward_sent(user_id):
+        return  # ödül daha önce gönderildi, tekrar gönderme
     reward = await db.get_setting("reward_link")
     if reward:
-        await safe_send(user_id, f"🎉 Tebrikler, tüm görevleri tamamladın!\n\nÖdülün: {reward}")
+        ok = await safe_send(user_id, f"🎉 Tebrikler, tüm görevleri tamamladın!\n\nÖdülün: {reward}")
     else:
-        await safe_send(user_id, "🎉 Tebrikler, tüm görevleri tamamladın! (Ödül linki henüz ayarlanmamış)")
+        ok = await safe_send(user_id, "🎉 Tebrikler, tüm görevleri tamamladın! (Ödül linki henüz ayarlanmamış)")
+    if ok:
+        await db.mark_reward_sent(user_id)
 
 
 # ============================================================
@@ -325,6 +339,27 @@ async def add_task_url(message: Message, state: FSMContext):
     )
     await state.clear()
     await message.answer(f"✅ Görev eklendi (ID: {task_id}).")
+
+    sent_count = await broadcast_new_task(task_id, data["title"])
+    await message.answer(f"📢 {sent_count} kullanıcıya bildirim gönderildi.")
+
+
+async def broadcast_new_task(task_id: int, title: str) -> int:
+    users = await db.get_all_users()
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="📌 Görevi Gör", callback_data=f"task_{task_id}")
+    ]])
+    sent = 0
+    for uid in users:
+        try:
+            await bot.send_message(
+                uid, f"🆕 Yeni görev eklendi!\n\n<b>{title}</b>",
+                parse_mode="HTML", reply_markup=kb
+            )
+            sent += 1
+        except Exception:
+            pass  # kullanıcı botu engellemiş ya da özelden başlatmamış, atla
+    return sent
 
 
 @router.message(Command("gorevler"))
