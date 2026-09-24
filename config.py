@@ -1,14 +1,18 @@
 # config.py
+import os
 
-BOT_TOKEN = "BURAYA_BOTFATHER_DAN_ALDIGIN_TOKENI_YAZ"
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+
+if not BOT_TOKEN:
+    raise ValueError("BOT_TOKEN environment variable bulunamadı! Render'de Environment kısmına ekle.")
 
 # Admin ID'lerin (kendi Telegram ID'ni yaz)
-ADMINS = [123456789]  # örnek, kendi ID'ni koy
+ADMINS = [123456789]  # buraya kendi ID'ni yaz
 
 # Başlangıç bakiyesi
 START_BALANCE = 0
 
-# Görev ödülleri (istersen değiştirebilirsin)
+# Görev ödülleri
 REWARDS = {
     "channel": 750,
     "group": 1000,
@@ -19,4 +23,4 @@ REWARDS = {
 }
 
 # 7 günlük kilit süresi (saniye)
-LOCK_DAYS = 7 * 24 * 60 * 60  # 7 gün
+LOCK_DAYS = 7 * 24 * 60 * 60
