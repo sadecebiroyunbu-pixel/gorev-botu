@@ -1,13 +1,22 @@
-import os
+# config.py
 
-BOT_TOKEN = os.getenv("BOT_TOKEN", "")
+BOT_TOKEN = "BURAYA_BOTFATHER_DAN_ALDIGIN_TOKENI_YAZ"
 
-# Virgülle ayrılmış admin user_id listesi, örn: "123456789,987654321"
-_admin_raw = os.getenv("ADMIN_IDS", "")
-ADMIN_IDS = [int(x.strip()) for x in _admin_raw.split(",") if x.strip().isdigit()]
+# Admin ID'lerin (kendi Telegram ID'ni yaz)
+ADMINS = [123456789]  # örnek, kendi ID'ni koy
 
-if not BOT_TOKEN:
-    raise RuntimeError("BOT_TOKEN ortam değişkeni ayarlanmamış!")
+# Başlangıç bakiyesi
+START_BALANCE = 0
 
-if not ADMIN_IDS:
-    raise RuntimeError("ADMIN_IDS ortam değişkeni ayarlanmamış! Örn: 123456789")
+# Görev ödülleri (istersen değiştirebilirsin)
+REWARDS = {
+    "channel": 750,
+    "group": 1000,
+    "bot": 500,
+    "view": 300,
+    "reaction": 400,
+    "boost": 800
+}
+
+# 7 günlük kilit süresi (saniye)
+LOCK_DAYS = 7 * 24 * 60 * 60  # 7 gün
