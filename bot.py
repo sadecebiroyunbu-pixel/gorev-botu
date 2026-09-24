@@ -12,7 +12,7 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     InlineKeyboardButton,
 )
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 
 import config
 import database as db
@@ -193,12 +193,36 @@ async def receive_proof(message: Message, state: FSMContext):
             logger.warning(f"Admin {admin_id}'e gönderilemedi: {e}")
 
 
+async def safe_send(user_id: int, text: str, notify_admin_on_fail: bool = True) -> bool:
+    """Kullanıcıya özel mesaj göndermeyi dener. Kullanıcı botu özelden hiç
+    başlatmadıysa Telegram engeller; bu durumda admin'e haber verir."""
+    try:
+        await bot.send_message(user_id, text)
+        return True
+    except TelegramForbiddenError:
+        logger.warning(f"Kullanıcı {user_id}'e mesaj gönderilemedi (bot engellenmiş ya da özelden başlatılmamış).")
+        if notify_admin_on_fail:
+            for admin_id in config.ADMIN_IDS:
+                try:
+                    await bot.send_message(
+                        admin_id,
+                        f"⚠️ Kullanıcı ID <code>{user_id}</code>'e mesaj gönderilemedi.\n"
+                        f"Muhtemel sebep: bu kullanıcı botu hiç ÖZELDEN (DM) başlatmamış.\n"
+                        f"Kullanıcıya botu özelden açıp /start demesini söyle, "
+                        f"görevler ve ödül ancak öyle iletilebilir.",
+                        parse_mode="HTML"
+                    )
+                except Exception:
+                    pass
+        return False
+
+
 async def send_reward(user_id: int):
     reward = await db.get_setting("reward_link")
     if reward:
-        await bot.send_message(user_id, f"🎉 Tebrikler, tüm görevleri tamamladın!\n\nÖdülün: {reward}")
+        await safe_send(user_id, f"🎉 Tebrikler, tüm görevleri tamamladın!\n\nÖdülün: {reward}")
     else:
-        await bot.send_message(user_id, "🎉 Tebrikler, tüm görevleri tamamladın! (Ödül linki henüz ayarlanmamış)")
+        await safe_send(user_id, "🎉 Tebrikler, tüm görevleri tamamladın! (Ödül linki henüz ayarlanmamış)")
 
 
 # ============================================================
@@ -218,7 +242,7 @@ async def admin_approve(call: CallbackQuery):
     await call.answer("Onaylandı.")
 
     task = await db.get_task(task_id)
-    await bot.send_message(user_id, f"✅ '{task['title']}' göreviniz onaylandı!")
+    await safe_send(user_id, f"✅ '{task['title']}' göreviniz onaylandı!")
 
     if await db.all_tasks_approved(user_id):
         await send_reward(user_id)
@@ -237,7 +261,7 @@ async def admin_reject(call: CallbackQuery):
     await call.answer("Reddedildi.")
 
     task = await db.get_task(task_id)
-    await bot.send_message(user_id, f"❌ '{task['title']}' göreviniz reddedildi. Doğru kanıtla tekrar deneyebilirsin: /start")
+    await safe_send(user_id, f"❌ '{task['title']}' göreviniz reddedildi. Doğru kanıtla tekrar deneyebilirsin: /start")
 
 
 # ============================================================
