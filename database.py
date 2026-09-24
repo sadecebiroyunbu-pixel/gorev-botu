@@ -51,6 +51,15 @@ async def init_db():
                 first_seen TEXT
             )
         """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS ad_channels (
+                id SERIAL PRIMARY KEY,
+                title TEXT NOT NULL,
+                chat_id TEXT NOT NULL,
+                active INTEGER DEFAULT 1,
+                added_at TEXT
+            )
+        """)
 
 
 # ---------- TASKS ----------
@@ -172,3 +181,33 @@ async def get_all_users():
     async with pool.acquire() as conn:
         rows = await conn.fetch("SELECT user_id FROM users")
         return [r["user_id"] for r in rows]
+
+
+# ---------- REKLAM KANALLARI ----------
+
+async def add_channel(title, chat_id):
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "INSERT INTO ad_channels (title, chat_id, active, added_at) VALUES ($1, $2, 1, $3) RETURNING id",
+            title, chat_id, datetime.utcnow().isoformat()
+        )
+        return row["id"]
+
+
+async def get_active_channels():
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        return await conn.fetch("SELECT * FROM ad_channels WHERE active = 1 ORDER BY id")
+
+
+async def get_all_channels():
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        return await conn.fetch("SELECT * FROM ad_channels ORDER BY id")
+
+
+async def delete_channel(channel_id):
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute("UPDATE ad_channels SET active = 0 WHERE id = $1", channel_id)
