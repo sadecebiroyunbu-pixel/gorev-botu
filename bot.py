@@ -45,6 +45,15 @@ class SetReward(StatesGroup):
     waiting_link = State()
 
 
+class AddChannel(StatesGroup):
+    title = State()
+    chat_id = State()
+
+
+class SendAd(StatesGroup):
+    waiting_content = State()
+
+
 # ============================================================
 #  KLAVYELER
 # ============================================================
@@ -404,6 +413,110 @@ async def set_reward_finish(message: Message, state: FSMContext):
     await message.answer("✅ Ödül linki kaydedildi.")
 
 
+# ============================================================
+#  ADMIN: REKLAM KANALLARI
+# ============================================================
+
+@router.message(Command("kanalekle"))
+async def add_channel_start(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    await state.set_state(AddChannel.title)
+    await message.answer("Kanalın/grubun adı ne? (senin hatırlaman için, örn. 'MRG Airdrop Kanalı')")
+
+
+@router.message(AddChannel.title)
+async def add_channel_title(message: Message, state: FSMContext):
+    await state.update_data(title=message.text.strip())
+    await state.set_state(AddChannel.chat_id)
+    await message.answer(
+        "Kanalın kullanıcı adını (@kanaladi) ya da chat ID'sini gönder.\n"
+        "⚠️ Bu botu o kanala/gruba ADMİN (mesaj gönderme yetkili) olarak eklemeyi unutma, "
+        "yoksa reklam gönderilemez."
+    )
+
+
+@router.message(AddChannel.chat_id)
+async def add_channel_finish(message: Message, state: FSMContext):
+    data = await state.get_data()
+    chat_id = message.text.strip()
+
+    try:
+        await bot.get_chat(chat_id)
+    except TelegramBadRequest as e:
+        await message.answer(
+            f"❌ Bu kanala erişemedim ({e}).\n"
+            "Botu kanala admin olarak ekleyip tekrar dene, ya da doğru @kullaniciadi/chat ID'yi gönder."
+        )
+        await state.clear()
+        return
+
+    channel_id = await db.add_channel(data["title"], chat_id)
+    await state.clear()
+    await message.answer(f"✅ Kanal kaydedildi (ID: {channel_id}): {data['title']}")
+
+
+@router.message(Command("kanallar"))
+async def list_channels_cmd(message: Message):
+    if not is_admin(message.from_user.id):
+        return
+    channels = await db.get_all_channels()
+    if not channels:
+        await message.answer("Henüz kayıtlı kanal yok.")
+        return
+    lines = []
+    for c in channels:
+        durum = "aktif" if c["active"] else "pasif"
+        lines.append(f"#{c['id']} {c['title']} ({c['chat_id']}) — {durum}")
+    await message.answer("\n".join(lines))
+
+
+@router.message(Command("kanalsil"))
+async def delete_channel_cmd(message: Message):
+    if not is_admin(message.from_user.id):
+        return
+    parts = message.text.split()
+    if len(parts) != 2 or not parts[1].isdigit():
+        await message.answer("Kullanım: /kanalsil <id>")
+        return
+    await db.delete_channel(int(parts[1]))
+    await message.answer("Kanal listeden çıkarıldı.")
+
+
+@router.message(Command("reklamgonder"))
+async def send_ad_start(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    channels = await db.get_active_channels()
+    if not channels:
+        await message.answer("Kayıtlı aktif kanal yok. Önce /kanalekle ile kanal ekle.")
+        return
+    await state.set_state(SendAd.waiting_content)
+    await message.answer(
+        f"📤 Reklamı gönder (metin, fotoğraf+yazı, video — ne istersen).\n"
+        f"Bu içerik {len(channels)} kanala aynen yayınlanacak."
+    )
+
+
+@router.message(SendAd.waiting_content)
+async def send_ad_broadcast(message: Message, state: FSMContext):
+    await state.clear()
+    channels = await db.get_active_channels()
+
+    sent, failed = 0, []
+    for c in channels:
+        try:
+            await message.copy_to(chat_id=c["chat_id"])
+            sent += 1
+        except Exception as e:
+            failed.append(f"{c['title']} ({e})")
+
+    report = f"✅ {sent} kanala gönderildi."
+    if failed:
+        report += f"\n\n❌ Gönderilemeyenler:\n" + "\n".join(failed)
+    await message.answer(report)
+
+
 @router.message(Command("yardim"))
 async def help_cmd(message: Message):
     if not is_admin(message.from_user.id):
@@ -414,7 +527,12 @@ async def help_cmd(message: Message):
         "/gorevekle — yeni görev ekle\n"
         "/gorevler — tüm görevleri listele\n"
         "/gorevsil ID — görevi pasif yap\n"
-        "/odulayarla — final ödül linkini belirle\n",
+        "/odulayarla — final ödül linkini belirle\n\n"
+        "<b>Reklam</b>\n"
+        "/kanalekle — reklam yayınlanacak kanal kaydet\n"
+        "/kanallar — kayıtlı kanalları listele\n"
+        "/kanalsil ID — kanalı listeden çıkar\n"
+        "/reklamgonder — kayıtlı tüm kanallara reklam yayınla\n",
         parse_mode="HTML"
     )
 
