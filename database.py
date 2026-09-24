@@ -1,111 +1,115 @@
 import os
-import aiosqlite
+import asyncpg
 from datetime import datetime
 
-DB_PATH = os.getenv("DB_PATH", "gorevbot.db")
+DATABASE_URL = os.getenv("DATABASE_URL", "")
+
+_pool = None
+
+
+async def get_pool():
+    global _pool
+    if _pool is None:
+        _pool = await asyncpg.create_pool(DATABASE_URL, ssl="require")
+    return _pool
 
 
 async def init_db():
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute("""
             CREATE TABLE IF NOT EXISTS tasks (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id SERIAL PRIMARY KEY,
                 title TEXT NOT NULL,
-                type TEXT NOT NULL,          -- 'kanal' veya 'bot'
-                target TEXT,                 -- kanal: @kullaniciadi ya da -100... chat_id
-                url TEXT NOT NULL,           -- kullanıcıya açılacak link
+                type TEXT NOT NULL,
+                target TEXT,
+                url TEXT NOT NULL,
                 active INTEGER DEFAULT 1,
                 created_at TEXT
             )
         """)
-        await db.execute("""
+        await conn.execute("""
             CREATE TABLE IF NOT EXISTS progress (
-                user_id INTEGER NOT NULL,
+                user_id BIGINT NOT NULL,
                 task_id INTEGER NOT NULL,
-                status TEXT DEFAULT 'bekliyor',   -- bekliyor / inceleniyor / onaylandi / reddedildi
+                status TEXT DEFAULT 'bekliyor',
                 photo_file_id TEXT,
                 updated_at TEXT,
                 PRIMARY KEY (user_id, task_id)
             )
         """)
-        await db.execute("""
+        await conn.execute("""
             CREATE TABLE IF NOT EXISTS settings (
                 key TEXT PRIMARY KEY,
                 value TEXT
             )
         """)
-        await db.commit()
 
 
 # ---------- TASKS ----------
 
 async def add_task(title, ttype, target, url):
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "INSERT INTO tasks (title, type, target, url, active, created_at) VALUES (?, ?, ?, ?, 1, ?)",
-            (title, ttype, target, url, datetime.utcnow().isoformat())
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "INSERT INTO tasks (title, type, target, url, active, created_at) "
+            "VALUES ($1, $2, $3, $4, 1, $5) RETURNING id",
+            title, ttype, target, url, datetime.utcnow().isoformat()
         )
-        await db.commit()
-        return cur.lastrowid
+        return row["id"]
 
 
 async def get_active_tasks():
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cur = await db.execute("SELECT * FROM tasks WHERE active = 1 ORDER BY id")
-        return await cur.fetchall()
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        return await conn.fetch("SELECT * FROM tasks WHERE active = 1 ORDER BY id")
 
 
 async def get_all_tasks():
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cur = await db.execute("SELECT * FROM tasks ORDER BY id")
-        return await cur.fetchall()
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        return await conn.fetch("SELECT * FROM tasks ORDER BY id")
 
 
 async def get_task(task_id):
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cur = await db.execute("SELECT * FROM tasks WHERE id = ?", (task_id,))
-        return await cur.fetchone()
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        return await conn.fetchrow("SELECT * FROM tasks WHERE id = $1", task_id)
 
 
 async def delete_task(task_id):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("UPDATE tasks SET active = 0 WHERE id = ?", (task_id,))
-        await db.commit()
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute("UPDATE tasks SET active = 0 WHERE id = $1", task_id)
 
 
 # ---------- PROGRESS ----------
 
 async def get_progress(user_id, task_id):
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cur = await db.execute(
-            "SELECT * FROM progress WHERE user_id = ? AND task_id = ?", (user_id, task_id)
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        return await conn.fetchrow(
+            "SELECT * FROM progress WHERE user_id = $1 AND task_id = $2", user_id, task_id
         )
-        return await cur.fetchone()
 
 
 async def set_progress(user_id, task_id, status, photo_file_id=None):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute("""
             INSERT INTO progress (user_id, task_id, status, photo_file_id, updated_at)
-            VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT(user_id, task_id) DO UPDATE SET
-                status=excluded.status,
-                photo_file_id=excluded.photo_file_id,
-                updated_at=excluded.updated_at
-        """, (user_id, task_id, status, photo_file_id, datetime.utcnow().isoformat()))
-        await db.commit()
+            VALUES ($1, $2, $3, $4, $5)
+            ON CONFLICT (user_id, task_id) DO UPDATE SET
+                status = EXCLUDED.status,
+                photo_file_id = EXCLUDED.photo_file_id,
+                updated_at = EXCLUDED.updated_at
+        """, user_id, task_id, status, photo_file_id, datetime.utcnow().isoformat())
 
 
 async def get_user_progress_map(user_id):
-    """{task_id: status} döner"""
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cur = await db.execute("SELECT task_id, status FROM progress WHERE user_id = ?", (user_id,))
-        rows = await cur.fetchall()
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("SELECT task_id, status FROM progress WHERE user_id = $1", user_id)
         return {r["task_id"]: r["status"] for r in rows}
 
 
@@ -120,17 +124,16 @@ async def all_tasks_approved(user_id):
 # ---------- SETTINGS (ödül linki) ----------
 
 async def set_setting(key, value):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("""
-            INSERT INTO settings (key, value) VALUES (?, ?)
-            ON CONFLICT(key) DO UPDATE SET value=excluded.value
-        """, (key, value))
-        await db.commit()
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO settings (key, value) VALUES ($1, $2)
+            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+        """, key, value)
 
 
 async def get_setting(key):
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cur = await db.execute("SELECT value FROM settings WHERE key = ?", (key,))
-        row = await cur.fetchone()
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT value FROM settings WHERE key = $1", key)
         return row["value"] if row else None
