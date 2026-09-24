@@ -44,6 +44,13 @@ async def init_db():
                 value TEXT
             )
         """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                user_id BIGINT PRIMARY KEY,
+                username TEXT,
+                first_seen TEXT
+            )
+        """)
 
 
 # ---------- TASKS ----------
@@ -137,3 +144,31 @@ async def get_setting(key):
     async with pool.acquire() as conn:
         row = await conn.fetchrow("SELECT value FROM settings WHERE key = $1", key)
         return row["value"] if row else None
+
+
+# ---------- ÖDÜL TEKİL GÖNDERİM TAKİBİ ----------
+
+async def is_reward_sent(user_id: int) -> bool:
+    return (await get_setting(f"reward_sent_{user_id}")) == "1"
+
+
+async def mark_reward_sent(user_id: int):
+    await set_setting(f"reward_sent_{user_id}", "1")
+
+
+# ---------- KULLANICI KAYDI (bildirim için) ----------
+
+async def add_user(user_id: int, username: str = None):
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO users (user_id, username, first_seen) VALUES ($1, $2, $3)
+            ON CONFLICT (user_id) DO UPDATE SET username = EXCLUDED.username
+        """, user_id, username, datetime.utcnow().isoformat())
+
+
+async def get_all_users():
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("SELECT user_id FROM users")
+        return [r["user_id"] for r in rows]
