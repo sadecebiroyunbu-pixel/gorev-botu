@@ -2,7 +2,6 @@
 
 import asyncio
 import logging
-import re
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import CommandStart
@@ -200,7 +199,12 @@ async def check_task(callback: CallbackQuery):
             
     except Exception as e:
         logging.error(f"Check error: {e}")
-        await callback.answer("Kontrol sırasında hata oluştu. Bot kanalda admin mi?", show_alert=True)
+        await callback.answer(
+            "❌ Kontrol başarısız!\n\n"
+            "• Bot kanalda admin mi?\n"
+            "• Link doğru mu?",
+            show_alert=True
+        )
 
 # ==================== GÖREV EKLEME ====================
 @dp.callback_query(F.data == "promote")
@@ -260,14 +264,15 @@ async def process_title(message: Message, state: FSMContext):
     task_type = data.get("task_type")
     link = data.get("link")
     
-    # chat_id'yi linkten çıkarmaya çalış
+    # chat_id'yi linkten doğru çıkar
     chat_id = link
     if "t.me/" in link:
-        part = link.split("t.me/")[-1].replace("+", "")
-        if part.startswith("@"):
-            chat_id = part
+        part = link.split("t.me/")[-1].split("?")[0].strip("/")
+        if part.startswith("+"):
+            # özel davet linki
+            chat_id = link
         else:
-            chat_id = "@" + part if not part.startswith("+") else link
+            chat_id = "@" + part.lstrip("@")
     
     reward = REWARDS.get(task_type, 500)
     
@@ -287,7 +292,8 @@ async def process_title(message: Message, state: FSMContext):
         f"Başlık: {title}\n"
         f"Ödül: +{reward} GRAM\n"
         f"Görev ID: {task_id}\n\n"
-        f"Artık diğer kullanıcılar bu görevi yapabilir.",
+        f"Artık diğer kullanıcılar bu görevi yapabilir.\n\n"
+        f"⚠️ Botu kanala/gruba <b>admin</b> olarak eklemeyi unutma!",
         reply_markup=main_menu(),
         parse_mode="HTML"
     )
