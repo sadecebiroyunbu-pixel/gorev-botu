@@ -1,7 +1,7 @@
 # database.py
 
 import aiosqlite
-from datetime import datetime, timedelta
+from datetime import datetime
 
 DB_NAME = "prgram.db"
 
@@ -41,7 +41,8 @@ async def init_db():
                 task_id INTEGER,
                 completed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 join_date TIMESTAMP,
-                revoked INTEGER DEFAULT 0
+                revoked INTEGER DEFAULT 0,
+                UNIQUE(user_id, task_id)
             )
         """)
         
@@ -65,10 +66,9 @@ async def update_balance(user_id: int, amount: int):
         await db.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amount, user_id))
         await db.commit()
 
-async def add_xp(user_id: int, xp: int):
-    async with aiosqlite.connect(DB_NAME) as db:
-        await db.execute("UPDATE users SET xp = xp + ? WHERE user_id = ?", (xp, user_id))
-        await db.commit()
+async def get_balance(user_id: int):
+    user = await get_user(user_id)
+    return user[3] if user else 0
 
 async def create_task(owner_id: int, task_type: str, title: str, link: str, chat_id: str, reward: int):
     async with aiosqlite.connect(DB_NAME) as db:
@@ -79,7 +79,7 @@ async def create_task(owner_id: int, task_type: str, title: str, link: str, chat
         await db.commit()
         return cursor.lastrowid
 
-async def get_active_tasks(task_type: str = None, limit: int = 10):
+async def get_active_tasks(task_type: str = None, limit: int = 15):
     async with aiosqlite.connect(DB_NAME) as db:
         if task_type:
             query = "SELECT * FROM tasks WHERE status = 'active' AND task_type = ? ORDER BY id DESC LIMIT ?"
@@ -90,13 +90,22 @@ async def get_active_tasks(task_type: str = None, limit: int = 10):
             async with db.execute(query, (limit,)) as cursor:
                 return await cursor.fetchall()
 
+async def get_task(task_id: int):
+    async with aiosqlite.connect(DB_NAME) as db:
+        async with db.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)) as cursor:
+            return await cursor.fetchone()
+
 async def add_completion(user_id: int, task_id: int):
     async with aiosqlite.connect(DB_NAME) as db:
-        await db.execute(
-            "INSERT INTO completions (user_id, task_id, join_date) VALUES (?, ?, ?)",
-            (user_id, task_id, datetime.now())
-        )
-        await db.commit()
+        try:
+            await db.execute(
+                "INSERT INTO completions (user_id, task_id, join_date) VALUES (?, ?, ?)",
+                (user_id, task_id, datetime.now())
+            )
+            await db.commit()
+            return True
+        except:
+            return False  # zaten yapmış
 
 async def check_completion(user_id: int, task_id: int):
     async with aiosqlite.connect(DB_NAME) as db:
