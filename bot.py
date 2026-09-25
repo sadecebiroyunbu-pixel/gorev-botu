@@ -26,6 +26,7 @@ dp = Dispatcher(storage=storage)
 class AddTask(StatesGroup):
     waiting_link = State()
     waiting_title = State()
+    waiting_budget = State()
 
 # ==================== KEYBOARDS ====================
 def main_menu():
@@ -127,7 +128,8 @@ async def earn_handler(callback: CallbackQuery):
 @dp.callback_query(F.data.startswith("cat_"))
 async def category_handler(callback: CallbackQuery):
     cat = callback.data.replace("cat_", "")
-    tasks = await get_active_tasks(cat)
+    user_id = callback.from_user.id
+    tasks = await get_active_tasks(task_type=cat, user_id=user_id)
     
     if not tasks:
         text = (
@@ -146,10 +148,13 @@ async def category_handler(callback: CallbackQuery):
     kb = []
     
     for task in tasks[:8]:
-        task_id, _, _, title, link, _, reward, *_ = task
-        text += f"• {title} → <b>+{reward} GRAM</b>\n"
+        task_id = task[0]
+        title = task[3]
+        reward = task[6]
+        remaining = task[8]
+        text += f"• {title} → <b>+{reward} GRAM</b> (kalan: {remaining})\n"
         kb.append([InlineKeyboardButton(
-            text=f"✅ {title[:25]} (+{reward})",
+            text=f"✅ {title[:22]} (+{reward})",
             callback_data=f"task_{task_id}"
         )])
     
@@ -170,11 +175,15 @@ async def show_task(callback: CallbackQuery):
         await callback.answer("Görev bulunamadı", show_alert=True)
         return
     
-    _, _, _, title, link, _, reward, *_ = task
+    title = task[3]
+    link = task[4]
+    reward = task[6]
+    remaining = task[8]
     
     text = (
         f"📌 <b>{title}</b>\n\n"
-        f"Ödül: <b>+{reward} GRAM</b>\n\n"
+        f"Ödül: <b>+{reward} GRAM</b>\n"
+        f"Kalan yer: <b>{remaining}</b>\n\n"
         f"1. Aşağıdaki butona tıkla ve abone ol\n"
         f"2. Sonra <b>Kontrol Et</b> butonuna bas"
     )
@@ -198,7 +207,12 @@ async def check_task(callback: CallbackQuery):
         await callback.answer("Görev bulunamadı", show_alert=True)
         return
     
-    _, _, task_type, title, link, chat_id, reward, *_ = task
+    if task[8] <= 0:
+        await callback.answer("Bu görevin kontenjanı dolmuş!", show_alert=True)
+        return
+    
+    chat_id = task[5]
+    reward = task[6]
     
     try:
         member = await bot.get_chat_member(chat_id=chat_id, user_id=user_id)
@@ -292,12 +306,52 @@ async def process_link(message: Message, state: FSMContext):
 @dp.message(AddTask.waiting_title)
 async def process_title(message: Message, state: FSMContext):
     title = message.text.strip()[:50]
-    data = await state.get_data()
+    await state.update_data(title=title)
+    await state.set_state(AddTask.waiting_budget)
     
+    data = await state.get_data()
+    task_type = data.get("task_type")
+    reward = REWARDS.get(task_type, 500)
+    
+    await message.answer(
+        f"💰 Bu görev için ne kadar GRAM harcayacaksın?\n\n"
+        f"Her kişiye verilecek ödül: <b>{reward} GRAM</b>\n\n"
+        f"Örnek: 5000 yazarsan yaklaşık {5000 // reward} kişi yapabilir.\n\n"
+        f"Bakiyenden düşülecek.",
+        reply_markup=cancel_kb(),
+        parse_mode="HTML"
+    )
+
+@dp.message(AddTask.waiting_budget)
+async def process_budget(message: Message, state: FSMContext):
+    try:
+        budget = int(message.text.strip())
+        if budget < 100:
+            await message.answer("❌ Minimum 100 GRAM olmalı.", reply_markup=cancel_kb())
+            return
+    except:
+        await message.answer("❌ Sadece sayı yaz.", reply_markup=cancel_kb())
+        return
+    
+    data = await state.get_data()
     task_type = data.get("task_type")
     link = data.get("link")
+    title = data.get("title")
     
-    # chat_id'yi linkten doğru çıkar
+    user_id = message.from_user.id
+    balance = await get_balance(user_id)
+    
+    if balance < budget:
+        await message.answer(
+            f"❌ Yetersiz bakiye!\n\n"
+            f"Bakiyen: {balance} GRAM\n"
+            f"Gereken: {budget} GRAM",
+            reply_markup=main_menu()
+        )
+        await state.clear()
+        return
+    
+    # chat_id çıkar
     chat_id = link
     if "t.me/" in link:
         part = link.split("t.me/")[-1].split("?")[0].strip("/")
@@ -308,23 +362,30 @@ async def process_title(message: Message, state: FSMContext):
     
     reward = REWARDS.get(task_type, 500)
     
+    # Bakiyeden düş
+    await update_balance(user_id, -budget)
+    
     task_id = await create_task(
-        owner_id=message.from_user.id,
+        owner_id=user_id,
         task_type=task_type,
         title=title,
         link=link,
         chat_id=chat_id,
-        reward=reward
+        reward=reward,
+        budget=budget
     )
     
     await state.clear()
+    
+    remaining = budget // reward
     
     await message.answer(
         f"✅ <b>Görev başarıyla eklendi!</b>\n\n"
         f"Başlık: {title}\n"
         f"Ödül: +{reward} GRAM\n"
+        f"Toplam bütçe: {budget} GRAM\n"
+        f"Yapabilecek kişi: ≈{remaining}\n"
         f"Görev ID: {task_id}\n\n"
-        f"Artık diğer kullanıcılar bu görevi yapabilir.\n\n"
         f"⚠️ Botu kanala/gruba <b>admin</b> olarak eklemeyi unutma!",
         reply_markup=main_menu(),
         parse_mode="HTML"
@@ -357,7 +418,8 @@ async def rules_handler(callback: CallbackQuery):
         "2. 7 günden önce çıkarsan kazandığın GRAM geri alınır.\n"
         "3. Sahte abonelik yasaktır.\n"
         "4. Görev eklerken botun kanalda admin olması gerekir.\n"
-        "5. Bakiye hiçbir zaman kaybolmaz."
+        "5. Görev eklerken GRAM harcarsın, insanlar yaptıkça kontenjan azalır.\n"
+        "6. Bakiye hiçbir zaman kaybolmaz."
     )
     try:
         await callback.message.edit_text(text, reply_markup=main_menu(), parse_mode="HTML")
