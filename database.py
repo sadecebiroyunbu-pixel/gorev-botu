@@ -29,6 +29,8 @@ async def init_db():
                 link TEXT,
                 chat_id TEXT,
                 reward INTEGER,
+                budget INTEGER DEFAULT 0,
+                remaining INTEGER DEFAULT 0,
                 status TEXT DEFAULT 'active',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -70,23 +72,40 @@ async def get_balance(user_id: int):
     user = await get_user(user_id)
     return user[3] if user else 0
 
-async def create_task(owner_id: int, task_type: str, title: str, link: str, chat_id: str, reward: int):
+async def create_task(owner_id: int, task_type: str, title: str, link: str, chat_id: str, reward: int, budget: int):
+    remaining = budget // reward if reward > 0 else 0
     async with aiosqlite.connect(DB_NAME) as db:
         cursor = await db.execute(
-            "INSERT INTO tasks (owner_id, task_type, title, link, chat_id, reward) VALUES (?, ?, ?, ?, ?, ?)",
-            (owner_id, task_type, title, link, chat_id, reward)
+            """INSERT INTO tasks 
+               (owner_id, task_type, title, link, chat_id, reward, budget, remaining) 
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (owner_id, task_type, title, link, chat_id, reward, budget, remaining)
         )
         await db.commit()
         return cursor.lastrowid
 
-async def get_active_tasks(task_type: str = None, limit: int = 15):
+async def get_active_tasks(task_type: str = None, user_id: int = None, limit: int = 15):
     async with aiosqlite.connect(DB_NAME) as db:
-        if task_type:
-            query = "SELECT * FROM tasks WHERE status = 'active' AND task_type = ? ORDER BY id DESC LIMIT ?"
+        if task_type and user_id:
+            query = """
+                SELECT t.* FROM tasks t
+                WHERE t.status = 'active' 
+                  AND t.task_type = ? 
+                  AND t.remaining > 0
+                  AND t.id NOT IN (
+                      SELECT task_id FROM completions 
+                      WHERE user_id = ? AND revoked = 0
+                  )
+                ORDER BY t.id DESC LIMIT ?
+            """
+            async with db.execute(query, (task_type, user_id, limit)) as cursor:
+                return await cursor.fetchall()
+        elif task_type:
+            query = "SELECT * FROM tasks WHERE status = 'active' AND task_type = ? AND remaining > 0 ORDER BY id DESC LIMIT ?"
             async with db.execute(query, (task_type, limit)) as cursor:
                 return await cursor.fetchall()
         else:
-            query = "SELECT * FROM tasks WHERE status = 'active' ORDER BY id DESC LIMIT ?"
+            query = "SELECT * FROM tasks WHERE status = 'active' AND remaining > 0 ORDER BY id DESC LIMIT ?"
             async with db.execute(query, (limit,)) as cursor:
                 return await cursor.fetchall()
 
@@ -102,10 +121,20 @@ async def add_completion(user_id: int, task_id: int):
                 "INSERT INTO completions (user_id, task_id, join_date) VALUES (?, ?, ?)",
                 (user_id, task_id, datetime.now())
             )
+            # remaining sayısını 1 azalt
+            await db.execute(
+                "UPDATE tasks SET remaining = remaining - 1 WHERE id = ? AND remaining > 0",
+                (task_id,)
+            )
+            # remaining 0 olduysa görevi kapat
+            await db.execute(
+                "UPDATE tasks SET status = 'finished' WHERE id = ? AND remaining <= 0",
+                (task_id,)
+            )
             await db.commit()
             return True
         except:
-            return False  # zaten yapmış
+            return False
 
 async def check_completion(user_id: int, task_id: int):
     async with aiosqlite.connect(DB_NAME) as db:
