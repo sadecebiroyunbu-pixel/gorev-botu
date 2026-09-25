@@ -101,11 +101,19 @@ async def get_active_tasks(task_type: str = None, user_id: int = None, limit: in
             async with db.execute(query, (task_type, user_id, limit)) as cursor:
                 return await cursor.fetchall()
         elif task_type:
-            query = "SELECT * FROM tasks WHERE status = 'active' AND task_type = ? AND remaining > 0 ORDER BY id DESC LIMIT ?"
+            query = """
+                SELECT * FROM tasks 
+                WHERE status = 'active' AND task_type = ? AND remaining > 0 
+                ORDER BY id DESC LIMIT ?
+            """
             async with db.execute(query, (task_type, limit)) as cursor:
                 return await cursor.fetchall()
         else:
-            query = "SELECT * FROM tasks WHERE status = 'active' AND remaining > 0 ORDER BY id DESC LIMIT ?"
+            query = """
+                SELECT * FROM tasks 
+                WHERE status = 'active' AND remaining > 0 
+                ORDER BY id DESC LIMIT ?
+            """
             async with db.execute(query, (limit,)) as cursor:
                 return await cursor.fetchall()
 
@@ -121,12 +129,10 @@ async def add_completion(user_id: int, task_id: int):
                 "INSERT INTO completions (user_id, task_id, join_date) VALUES (?, ?, ?)",
                 (user_id, task_id, datetime.now())
             )
-            # remaining sayısını 1 azalt
             await db.execute(
                 "UPDATE tasks SET remaining = remaining - 1 WHERE id = ? AND remaining > 0",
                 (task_id,)
             )
-            # remaining 0 olduysa görevi kapat
             await db.execute(
                 "UPDATE tasks SET status = 'finished' WHERE id = ? AND remaining <= 0",
                 (task_id,)
