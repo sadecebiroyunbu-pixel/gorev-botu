@@ -1,5 +1,7 @@
 import os
 import asyncio
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 import ccxt
 from dotenv import load_dotenv
 from telegram import Update
@@ -145,7 +147,28 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text)
 
 
+# Render'ın port beklediği için sahte web sunucusu
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot is running")
+
+    def log_message(self, format, *args):
+        return
+
+
+def run_web_server():
+    port = int(os.environ.get("PORT", 10000))
+    server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
+    print(f"Web server started on port {port}")
+    server.serve_forever()
+
+
 def main():
+    # Web sunucusunu arka planda başlat
+    threading.Thread(target=run_web_server, daemon=True).start()
+
     app = (
         Application.builder()
         .token(TELEGRAM_TOKEN)
