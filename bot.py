@@ -22,7 +22,7 @@ exchange = ccxt.binance({
 })
 
 MIN_VOLUME = 300000
-TRADE_AMOUNT = 0.4
+TRADE_AMOUNT = 0.4          # 50 cent'e yakın
 RSI_BUY = 30
 RSI_SELL = 70
 
@@ -91,30 +91,46 @@ async def scan_and_trade(context: ContextTypes.DEFAULT_TYPE):
 
                 rsi = calculate_rsi(closes)
 
+                # === ALIM ===
                 if rsi < RSI_BUY and symbol not in open_positions:
-                    open_positions[symbol] = price
-                    await send_log(context,
-                        f"✅ ALIM SİNYALİ\n"
-                        f"Parite: {symbol}\n"
-                        f"Fiyat: {price:.6f}\n"
-                        f"RSI: {rsi:.1f}\n"
-                        f"Miktar: {TRADE_AMOUNT}$")
+                    try:
+                        amount = TRADE_AMOUNT / price
+                        order = exchange.create_market_buy_order(symbol, amount)
+                        open_positions[symbol] = price
+                        await send_log(context,
+                            f"✅ GERÇEK ALIM YAPILDI\n"
+                            f"Parite: {symbol}\n"
+                            f"Fiyat: {price:.6f}\n"
+                            f"RSI: {rsi:.1f}\n"
+                            f"Miktar: {TRADE_AMOUNT}$")
+                    except Exception as e:
+                        await send_log(context, f"❌ Alım hatası ({symbol}): {str(e)}")
 
+                # === SATIM ===
                 elif rsi > RSI_SELL and symbol in open_positions:
-                    entry = open_positions[symbol]
-                    profit_pct = ((price - entry) / entry) * 100
-                    del open_positions[symbol]
-                    await send_log(context,
-                        f"💰 SATIM SİNYALİ\n"
-                        f"Parite: {symbol}\n"
-                        f"Giriş: {entry:.6f}\n"
-                        f"Çıkış: {price:.6f}\n"
-                        f"Kâr: %{profit_pct:.2f}")
+                    try:
+                        balance = exchange.fetch_balance()
+                        coin = symbol.split('/')[0]
+                        free_amount = balance['free'].get(coin, 0)
+
+                        if free_amount > 0:
+                            order = exchange.create_market_sell_order(symbol, free_amount)
+                            entry = open_positions[symbol]
+                            profit_pct = ((price - entry) / entry) * 100
+                            del open_positions[symbol]
+                            await send_log(context,
+                                f"💰 GERÇEK SATIM YAPILDI\n"
+                                f"Parite: {symbol}\n"
+                                f"Giriş: {entry:.6f}\n"
+                                f"Çıkış: {price:.6f}\n"
+                                f"Kâr: %{profit_pct:.2f}")
+                    except Exception as e:
+                        await send_log(context, f"❌ Satım hatası ({symbol}): {str(e)}")
 
             except Exception:
                 continue
 
-            await asyncio.sleep(0.2)
+            await asyncio.sleep(0.25)
 
         await send_log(context, f"✅ TARAMA TAMAMLANDI {total}/{total}")
 
@@ -126,14 +142,14 @@ async def scan_and_trade(context: ContextTypes.DEFAULT_TYPE):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🤖 Oto Trader Bot aktif!\n\n"
-        "/scan → Tarama başlat\n"
+        "🤖 Oto Trader Bot (GERÇEK İŞLEM) aktif!\n\n"
+        "/scan → Tarama + işlem başlat\n"
         "/status → Açık pozisyonlar"
     )
 
 
 async def scan_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Tarama başlatılıyor...")
+    await update.message.reply_text("Tarama ve gerçek işlem başlatılıyor...")
     await scan_and_trade(context)
 
 
@@ -147,13 +163,11 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text)
 
 
-# Render'ın port beklediği için sahte web sunucusu
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
         self.wfile.write(b"Bot is running")
-
     def log_message(self, format, *args):
         return
 
@@ -166,7 +180,6 @@ def run_web_server():
 
 
 def main():
-    # Web sunucusunu arka planda başlat
     threading.Thread(target=run_web_server, daemon=True).start()
 
     app = (
@@ -181,7 +194,7 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("scan", scan_cmd))
     app.add_handler(CommandHandler("status", status))
-    print("Bot çalışıyor...")
+    print("Bot çalışıyor (GERÇEK İŞLEM MODU)...")
     app.run_polling(drop_pending_updates=True)
 
 
