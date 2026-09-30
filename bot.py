@@ -20,7 +20,7 @@ exchange = ccxt.binance({
 })
 
 MIN_VOLUME = 300000
-TRADE_AMOUNT = 5
+TRADE_AMOUNT = 0.4
 RSI_BUY = 30
 RSI_SELL = 70
 
@@ -155,4 +155,8 @@ def main():
 
 
 if __name__ == "__main__":
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        asyncio.set_event_loop(asyncio.new_event_loop())
     main()
